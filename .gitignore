@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment / installers
+envs/
+
+# Temp files
+~$*
+
+# Excel temp
+*.tmp
