@@ -19,6 +19,20 @@ from sqlalchemy import create_engine, text
 from openpyxl import load_workbook
 import openpyxl
 
+import bcrypt
+
+def generate_hashed_password(password: str) -> str:
+    """生成 bcrypt 加密后的密码"""
+    # 将密码编码为 bytes
+    password_bytes = password.encode('utf-8')
+    
+    # 生成 salt 并加密
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    
+    # 返回字符串形式
+    return hashed.decode('utf-8')
+
 # ── PostgreSQL 连接配置 ──────────────────────────────────────────────────────────
 DB_CONNECTION = 'postgresql://postgres:postgres@localhost:5432/postgres'
 

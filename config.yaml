@@ -4,26 +4,34 @@ cookie:
   name: some_cookie_name
 credentials:
   usernames:
-    ziyan.gao19@gmail.com:
-      email: ziyan.gao19@gmail.com
-      name: ZIYAN GAO
-      password: $2b$12$cR0HIEoFIAMy41J0FwZAWuvLVYhXP8PIzlVa9aEpX.dw4IwIPEhFK
-    p.nardviriyakul20@gmail.com:
-      email: p.nardviriyakul20@gmail.com
-      name: PASAVICH NARDVIRIYAKUL
-      password: $2b$12$pQbPSCtql4E.urIqoqBoPeCk9ExQzXK5ySwrdz03MsX1/epapYiLi
-    yifan.chen20@gmail.com:
-      email: yifan.chen20@gmail.com
-      name: YIFAN CHEN
-      password: $2b$12$OoIrynTHD8LqB5MiKO9oQuNBpmE7uTTNG0J/ZRb3lrmWKPNkSA/yS
-    wei.chen@gmail.com:
-      email: wei.chen@gmail.com
-      name: WEI CHEN
-      password: $2b$12$ztWBc.e5wPnCUksq4lMGSOzYIt5DpBKaz2jZoA8ilArZ190kfp0fC
     admin:
       email: admin
       name: ADMIN ADMIN
       password: $2b$12$rMI7Hc.452rIHj96DOtCG.cFSBrAhFet/DnWdrVBsB3nvawKwdQL2
+    prod01:
+      email: prod01
+      name: prod 01
+      password: $2b$12$cT43s7bpIda40K5lxPX6MO60W4mjcFfZYSO2h.1j26cca.B1PiEgi
+    prod02:
+      email: prod02
+      name: prod 02
+      password: $2b$12$dRz6LPUGFqcgC.5voUN/5eBXscFZxjJ5lj11EmH6S72NcRDXxkFqm
+    tech01:
+      email: tech01
+      name: tech 01
+      password: $2b$12$acpLg494XulnHyTUiHNfJew7hJlh7tU6lPg6QEmB6n6WDfbSYcKWG
+    tech02:
+      email: tech02
+      name: tech 02
+      password: $2b$12$mxWOIrcXwZqqULrAdL5poeiAIg8TLtrWAt2xu5lyrN3P8Wv4wJiIy
+    tech03:
+      email: tech03
+      name: tech 03
+      password: $2b$12$Prw/TQ5vZ9E3al.sTYpr9u2ZwVKDISjHkMEwSUloAvvIwv0zxjDm2
+    auto01:
+      email: auto01
+      name: auto 01
+      password: $2b$12$DmmeoiZzxDq57mBdf5ETmOrnU34kIlMoBYMsOU7G59vOMMvqKn77m
 preauthorized:
   emails:
   - fei.liu.csu@gmail.com
