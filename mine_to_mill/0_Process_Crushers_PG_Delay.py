@@ -332,7 +332,7 @@ def process_cvr_data_for_date(engine, start_date, end_date, overwrite=False):
         last_end_time = None
 
         if not daily_data.empty:
-            processor_data = daily_data[daily_data['end_processor'] == processor].copy()
+            processor_data = daily_data[daily_data['end_processor_group_reporting'] == processor].copy()
 
             for _, dump_record in processor_data.iterrows():
                 dump_time = dump_record['Dump Time']
