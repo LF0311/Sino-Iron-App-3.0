@@ -458,6 +458,7 @@ class MinestarImporter:
                     ))
                     conn.commit()
                 except Exception as e:
+                    conn.rollback()
                     if 'already exists' not in str(e):
                         print(f"  Warning adding column {col}: {e}")
             # Migrate end_processor → end_processor_group_reporting, then drop redundant columns
@@ -497,6 +498,11 @@ class MinestarImporter:
 
         # Keep only columns that actually exist in PG truck_cycles (auto-filter extras)
         pg_cols = self._get_pg_columns('truck_cycles')
+        if not pg_cols:
+            # Fresh database — table will be created by to_sql with all DataFrame columns
+            print(f"\n  ── Fresh table — writing all {len(df.columns)} columns ──\n")
+            return df
+
         keep    = [c for c in df.columns if c in pg_cols]
         dropped = [c for c in df.columns if c not in pg_cols]
         pg_only = [c for c in pg_cols if c not in df.columns]
@@ -517,12 +523,16 @@ class MinestarImporter:
     def _write_to_pg(self, df, overwrite, start_date, end_date):
         if overwrite:
             with self.engine.connect() as conn:
-                conn.execute(text(
-                    "DELETE FROM truck_cycles "
-                    "WHERE end_timestamp >= :t1 AND end_timestamp <= :t2"
-                ), {'t1': start_date, 't2': end_date})
-                conn.commit()
-            print(f"  [overwrite] Deleted existing rows in truck_cycles for {start_date.date()} ~ {end_date.date()}")
+                try:
+                    conn.execute(text(
+                        "DELETE FROM truck_cycles "
+                        "WHERE end_timestamp >= :t1 AND end_timestamp <= :t2"
+                    ), {'t1': start_date, 't2': end_date})
+                    conn.commit()
+                    print(f"  [overwrite] Deleted existing rows in truck_cycles for {start_date.date()} ~ {end_date.date()}")
+                except Exception:
+                    conn.rollback()
+                    # Table doesn't exist yet — to_sql will create it
         else:
             with self.engine.connect() as conn:
                 existing_df = pd.read_sql(
