@@ -390,12 +390,14 @@ class PIImporter:
                 continue
             time_col = TABLE_TIME_COL[table]
             print(f"\nMerging {table} ({len(col_dict)} columns)...")
-            merged = None
-            for col, df in col_dict.items():
-                df_r = df.rename(columns={'ts': time_col, 'value': col})
-                merged = df_r if merged is None else pd.merge(merged, df_r, on=time_col, how='outer')
-            merged = merged.sort_values(time_col).reset_index(drop=True)
-            merged[time_col] = pd.to_datetime(merged[time_col])
+            # concat on index instead of iterative outer merge — avoids row explosion
+            # when PI timestamps have sub-second offsets across tags
+            series = [df.set_index('ts')['value'].rename(col) for col, df in col_dict.items()]
+            merged = pd.concat(series, axis=1)
+            merged.index = pd.to_datetime(merged.index).round('1min')
+            merged = merged.groupby(level=0).mean()  # collapse any dup timestamps after rounding
+            merged.index.name = time_col
+            merged = merged.reset_index().sort_values(time_col).reset_index(drop=True)
             num_cols = merged.select_dtypes(include=[np.number]).columns
             merged[num_cols] = merged[num_cols].round(2)
             print(f"  Rows: {len(merged)}  Time: {merged[time_col].min()} ~ {merged[time_col].max()}")
