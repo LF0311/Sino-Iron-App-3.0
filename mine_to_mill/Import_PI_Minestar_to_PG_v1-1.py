@@ -337,11 +337,15 @@ class PIImporter:
         t_min, t_max = df[time_col].min(), df[time_col].max()
         if overwrite:
             with self.engine.connect() as conn:
-                conn.execute(text(
-                    f'DELETE FROM {table} WHERE "{time_col}" >= :t1 AND "{time_col}" <= :t2'
-                ), {'t1': t_min, 't2': t_max})
-                conn.commit()
-            print(f"  [overwrite] Deleted existing rows in {table} for {t_min} ~ {t_max}")
+                try:
+                    conn.execute(text(
+                        f'DELETE FROM {table} WHERE "{time_col}" >= :t1 AND "{time_col}" <= :t2'
+                    ), {'t1': t_min, 't2': t_max})
+                    conn.commit()
+                    print(f"  [overwrite] Deleted existing rows in {table} for {t_min} ~ {t_max}")
+                except Exception:
+                    conn.rollback()
+                    # Table doesn't exist yet — to_sql will create it
         else:
             with self.engine.connect() as conn:
                 existing_df = pd.read_sql(
@@ -475,6 +479,7 @@ class MinestarImporter:
                     conn.execute(text(sql))
                     conn.commit()
                 except Exception as e:
+                    conn.rollback()
                     print(f"  Warning (truck_cycles migration): {e}")
 
     def _transform(self, df):
