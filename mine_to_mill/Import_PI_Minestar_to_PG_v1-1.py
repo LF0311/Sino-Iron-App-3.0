@@ -292,6 +292,25 @@ class PIImporter:
         webid = self._resolve_webid(tag)
         if not webid:
             return pd.DataFrame(columns=['ts', 'value'])
+
+        # Auto-chunk: PI interpolated endpoint has a ~150k point limit per request.
+        # At 1-min interval, 60 days ≈ 86,400 points — safely within limit.
+        CHUNK_DAYS = 60
+        total_days = (end_dt - start_dt).days
+        if total_days > CHUNK_DAYS:
+            chunks = []
+            chunk_start = start_dt
+            while chunk_start < end_dt:
+                chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS), end_dt)
+                chunk_df = self._query_interpolated_single(tag, webid, chunk_start, chunk_end)
+                if not chunk_df.empty:
+                    chunks.append(chunk_df)
+                chunk_start = chunk_end
+            return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame(columns=['ts', 'value'])
+
+        return self._query_interpolated_single(tag, webid, start_dt, end_dt)
+
+    def _query_interpolated_single(self, tag, webid, start_dt, end_dt):
         params = {
             'startTime': start_dt.strftime('%Y-%m-%dT%H:%M:%SZ'),
             'endTime':   end_dt.strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -343,6 +362,7 @@ class PIImporter:
                     ))
                     conn.commit()
                 except Exception as e:
+                    conn.rollback()
                     if 'already exists' not in str(e):
                         print(f"  Warning adding column {col}: {e}")
 
@@ -356,6 +376,7 @@ class PIImporter:
                     ))
                     conn.commit()
                 except Exception as e:
+                    conn.rollback()
                     if 'already exists' not in str(e):
                         print(f"  Warning adding column {col}: {e}")
 
