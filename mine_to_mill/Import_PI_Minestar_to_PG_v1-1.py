@@ -366,19 +366,6 @@ class PIImporter:
                     if 'already exists' not in str(e):
                         print(f"  Warning adding column {col}: {e}")
 
-        # production_lines columns added over time
-        prod_new_cols = ['n2num自磨机转速']
-        with self.engine.connect() as conn:
-            for col in prod_new_cols:
-                try:
-                    conn.execute(text(
-                        f'ALTER TABLE production_lines ADD COLUMN IF NOT EXISTS "{col}" double precision'
-                    ))
-                    conn.commit()
-                except Exception as e:
-                    conn.rollback()
-                    if 'already exists' not in str(e):
-                        print(f"  Warning adding column {col}: {e}")
 
     def _write_to_pg(self, df, table, time_col, overwrite):
         t_min, t_max = df[time_col].min(), df[time_col].max()
