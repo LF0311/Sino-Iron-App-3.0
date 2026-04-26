@@ -333,40 +333,6 @@ class PIImporter:
 
     # ── Write to PG ───────────────────────────────────────────────────────────
 
-    def _ensure_schema(self):
-        """Ensure all new columns exist in realtime_data."""
-        new_cols = (
-            [f'n{i}num原矿仓对应圆盘给矿频率' for i in range(1, 19)] +
-            ['cvr12101运行频率', 'cvr12102运行频率', 'cvr14001运行频率',
-             'cvr12201运行频率', 'cvr12202运行频率', 'cvr12203运行频率', 'cvr14002运行频率',
-             'n1num布料小车速度', 'n2num布料小车速度',
-             'n1num旋回破碎机给料仓料位', 'n1num旋回破碎机给料仓料位_1',
-             'n2num旋回破碎机给料仓料位', 'n2num旋回破碎机给料仓料位_1',
-             'n3num旋回破碎机给料仓料位', 'n3num旋回破碎机给料仓料位_1',
-             'n4num旋回破碎机给料仓料位', 'n4num旋回破碎机给料仓料位_1',
-             'n1num旋回破碎机运行功率', 'n2num旋回破碎机运行功率',
-             'n3num旋回破碎机运行功率', 'n4num旋回破碎机运行功率',
-             'n1num旋回破碎机缓冲仓料位', 'n2num旋回破碎机缓冲仓料位',
-             'n3num旋回破碎机缓冲仓料位', 'n4num旋回破碎机缓冲仓料位',
-             'n1num排料皮带矿量', 'n2num排料皮带矿量',
-             'n3num排料皮带矿量', 'n4num排料皮带矿量',
-             'n1num排料皮带频率', 'n2num排料皮带频率',
-             'n3num排料皮带频率', 'n4num排料皮带频率',
-             '平均仓位', '平均矿量']
-        )
-        with self.engine.connect() as conn:
-            for col in new_cols:
-                try:
-                    conn.execute(text(
-                        f'ALTER TABLE realtime_data ADD COLUMN IF NOT EXISTS "{col}" double precision'
-                    ))
-                    conn.commit()
-                except Exception as e:
-                    conn.rollback()
-                    if 'already exists' not in str(e):
-                        print(f"  Warning adding column {col}: {e}")
-
-
     def _write_to_pg(self, df, table, time_col, overwrite):
         t_min, t_max = df[time_col].min(), df[time_col].max()
         if overwrite:
@@ -405,8 +371,6 @@ class PIImporter:
         print(f"[PI] Starting import  {start_date.date()} ~ {end_date.date()}")
         print(f"     overwrite={overwrite} | tags={len(PI_TAG_MAPPING)}")
         print(f"{'─' * 60}")
-
-        self._ensure_schema()
 
         table_cols = {'realtime_data': {}, 'production_lines': {}}
 
