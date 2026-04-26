@@ -152,6 +152,7 @@ PI_TAG_MAPPING = {
     '2_II2161144_V_PV':    ('production_lines', 'n6num自磨机运行电流'),
     # SAG mill rotation speed (lines 1-2: motor speed tag; lines 3-6: tachometer tag)
     '2_AGM21101MTR_V_RT01': ('production_lines', 'n1num自磨机转速'),
+    '2_AGM21201MTR_V_RT01': ('production_lines', 'n2num自磨机转速'),
     '2_AGM21301_V_SPD':     ('production_lines', 'n3num自磨机转速'),
     '2_SI2141145_V_PV':     ('production_lines', 'n4num自磨机转速'),
     '2_SI2151145_V_PV':     ('production_lines', 'n5num自磨机转速'),
@@ -189,7 +190,8 @@ MINESTAR_COL_RENAME = {
     'mag_fe':           'magfe_pct',
     # Geology / location fields
     'geomat_domain':    'geomet_domain',        # legacy: Geomet Domain → geomet_domain
-    # 'bench_name' → 'bench': deprecated — Minestar actual column is bench_id, keep as-is
+    'bench_name':       'bench_id',             # Minestar exports bench_name; PG column is bench_id
+    'end_processor':    'end_processor_group_reporting',  # e.g. CR1, CR2 → reporting destination
     # 'material'   → 'ore_waste': deprecated — truck_cycles stores material; rename would lose data
     'shot_name':        'shot_id',              # legacy: Shot ID → shot_id (now a string e.g. WST:0838:0146)
     # Minestar system timestamp (prefixed to distinguish from business timestamps)
@@ -198,7 +200,7 @@ MINESTAR_COL_RENAME = {
 # Columns from Minestar that are NOT written to PG
 # - CreatedBy: no business value
 # - Cycle_date: Minestar internal date; we derive date ourselves from start_timestamp
-# - Ore_Waste_Block: corresponds to legacy Ore/Waste Block; unused downstream, absence is acceptable
+# - Ore_Waste_Block: does not exist in the Minestar source view (absent from SELECT *)
 MINESTAR_DROP_COLS = ['CreatedBy', 'Cycle_date', 'Ore_Waste_Block']
 
 
@@ -344,6 +346,19 @@ class PIImporter:
                     if 'already exists' not in str(e):
                         print(f"  Warning adding column {col}: {e}")
 
+        # production_lines columns added over time
+        prod_new_cols = ['n2num自磨机转速']
+        with self.engine.connect() as conn:
+            for col in prod_new_cols:
+                try:
+                    conn.execute(text(
+                        f'ALTER TABLE production_lines ADD COLUMN IF NOT EXISTS "{col}" double precision'
+                    ))
+                    conn.commit()
+                except Exception as e:
+                    if 'already exists' not in str(e):
+                        print(f"  Warning adding column {col}: {e}")
+
     def _write_to_pg(self, df, table, time_col, overwrite):
         t_min, t_max = df[time_col].min(), df[time_col].max()
         if overwrite:
@@ -473,6 +488,19 @@ class MinestarImporter:
                 except Exception as e:
                     if 'already exists' not in str(e):
                         print(f"  Warning adding column {col}: {e}")
+            # Migrate end_processor → end_processor_group_reporting, then drop redundant columns
+            migrations = [
+                "UPDATE truck_cycles SET end_processor_group_reporting = end_processor "
+                "WHERE end_processor IS NOT NULL AND end_processor_group_reporting IS NULL",
+                "ALTER TABLE truck_cycles DROP COLUMN IF EXISTS end_processor",
+                "ALTER TABLE truck_cycles DROP COLUMN IF EXISTS ore_waste_block",
+            ]
+            for sql in migrations:
+                try:
+                    conn.execute(text(sql))
+                    conn.commit()
+                except Exception as e:
+                    print(f"  Warning (truck_cycles migration): {e}")
 
     def _transform(self, df):
         """Rename columns, drop unwanted columns, and add the date column."""

@@ -5,6 +5,7 @@ import pandas as pd
 import datetime
 from PIL import Image, ImageDraw, ImageFont
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import random
 import json
 import yaml
@@ -1625,7 +1626,7 @@ def main():
             # Update layout
             fig.update_layout(
                 barmode="stack",
-                title=f"Real-time Stockpile Status - Last updated: {datetime.datetime.now().strftime('%I:%M:%S %p %d-%m-%Y')}",
+                title=f"Real-time Stockpile Status - Last updated: {max((v['time'] for v in silo_data.values() if v.get('time') is not None), default=datetime.datetime.now()).strftime('%I:%M:%S %p %d-%m-%Y')}",
                 xaxis_title="Stockpile Silo",
                 yaxis_title=f"Stockpile Composition ({'Tons' if display_option == 'Tonnage' else 'Percentage'})",
                 showlegend=True,
@@ -2115,8 +2116,9 @@ def main():
                             line=dict(shape='spline')
                         ))
 
+                last_updated_throughput = mill_data['time'].max()
                 fig.update_layout(
-                    title=f"Mill Throughput - Last updated: {datetime.datetime.now().strftime('%I:%M:%S %p %d-%m-%Y')}",
+                    title=f"Mill Throughput - Last updated: {last_updated_throughput.strftime('%I:%M:%S %p %d-%m-%Y')}",
                     xaxis_title="Date and Time",
                     yaxis_title="Throughput Rate - t/h",
                     template="plotly_dark"
@@ -2126,37 +2128,7 @@ def main():
 
             except Exception as e:
                 st.error(f"Error loading mill throughput data: {e}")
-                st.info("Using example data for demonstration")
-
-                # Example data if real data is not available
-                dates_mill = pd.date_range(start="2024-10-06", end="2024-12-29", freq="7D")
-                mill_names = ["Mill #1", "Mill #2", "Mill #3", "Mill #4", "Mill #5", "Mill #6"]
-                throughput_data = [
-                    [1600, 1450, 1550, 1300, 1600, 1250, 1450, 1500, 1600, 1250, 1550, 1450],
-                    [1200, 1300, 1150, 1350, 1200, 1100, 1250, 1400, 1200, 1300, 1250, 1450],
-                    [1000, 1150, 1020, 900, 1050, 980, 1100, 1150, 1250, 1050, 1200, 1000],
-                    [1400, 1450, 1300, 1250, 1400, 1150, 1350, 1450, 1500, 1300, 1550, 1600],
-                    [1100, 1050, 1150, 1250, 1100, 1200, 1150, 1300, 1250, 1350, 1200, 1400],
-                    [800, 950, 870, 800, 850, 900, 950, 800, 860, 910, 800, 850]
-                ]
-
-                fig = go.Figure()
-                for mill_name, data in zip(mill_names, throughput_data):
-                    fig.add_trace(go.Scatter(
-                        x=dates_mill,
-                        y=data,
-                        mode='lines',
-                        name=mill_name,
-                        line=dict(shape='spline')
-                    ))
-
-                fig.update_layout(
-                    title=f"Mill Throughput (Example Data) - Last updated: {datetime.datetime.now().strftime('%I:%M:%S %p %d-%m-%Y')}",
-                    xaxis_title="Date and Time",
-                    yaxis_title="Throughput Rate - t/h",
-                    template="plotly_dark"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                st.warning("No data available. Please check database connection.")
 
             # 2. Mill mineral data visualization - moved above stockpile visualization
             # 添加缓存装饰器用于数据加载
@@ -2311,7 +2283,8 @@ def main():
                     engine = create_engine(_db)
                     query = text("""
                         SELECT DISTINCT ON (mill_num)
-                            mill_num, mill_composition_tons, mill_composition_pct
+                            mill_num, time, mill_composition_tons, mill_composition_pct,
+                            mill_composition_properties
                         FROM mill_feed
                         ORDER BY mill_num, time DESC
                     """)
@@ -2341,130 +2314,245 @@ def main():
                             return {}
                     return {}
 
+                last_updated_comp = pd.to_datetime(all_mill_df['time']).max() if 'time' in all_mill_df.columns and not all_mill_df.empty else None
+
                 mill_compositions = {}
+                mill_properties_by_mill = {}
                 for _, row in all_mill_df.iterrows():
                     i = int(row['mill_num'])
                     comp_data = parse_jb(row.get(column_to_use))
                     if comp_data:
                         mill_compositions[f"Mill #{i}"] = comp_data
+                    prop_data = parse_jb(row.get('mill_composition_properties'))
+                    if prop_data:
+                        mill_properties_by_mill[f"Mill #{i}"] = prop_data
 
-                # 使用缓存的函数生成图表
+                # Mill composition chart
                 if mill_compositions:
                     fig_mill_ore = generate_mill_composition_chart(mill_compositions, display_option)
+                    if last_updated_comp is not None:
+                        value_type = "Tons" if display_option == "Tonnage" else "Percentage (%)"
+                        fig_mill_ore.update_layout(
+                            title=f"Mill Composition - {value_type} - Last updated: {last_updated_comp.strftime('%I:%M:%S %p %d-%m-%Y')}"
+                        )
                     st.plotly_chart(fig_mill_ore, use_container_width=True)
                 else:
                     st.warning("No mill composition data available in mill_feed table")
 
+                # ── Weighted Ore Properties section ──────────────────────────
+                if mill_properties_by_mill:
+                    st.subheader("Mill Feed Weighted Ore Properties", divider="rainbow")
+
+                    prop_options = ["MagFe%", "DTR%", "Fe_Head%", "MagFe_DTR%", "SiO2_DTR%", "Fe_Concentrate%", "P80_IMT_um"]
+                    available_props = [p for p in prop_options if any(p in v for v in mill_properties_by_mill.values())]
+
+                    if available_props:
+                        # Row 1: Select Mills (full width)
+                        # Always offer all 6 mills; default to those with data in current snapshot
+                        all_mill_options = [f"Mill #{i}" for i in range(1, 7)]
+                        selected_mills_prop = st.multiselect(
+                            "Select Mills", all_mill_options, default=all_mill_options, key="mill_prop_select"
+                        )
+
+                        # Row 2: Time controls (above property selector)
+                        time_range_options = {
+                            "Last 1 hour (10-min interval)":   (1,   10),
+                            "Last 3 hours (20-min interval)":  (3,   20),
+                            "Last 24 hours (1-hour interval)": (24,  60),
+                            "Last 3 days (6-hour interval)":   (72, 360),
+                        }
+                        anchor_default = last_updated_comp.to_pydatetime() if last_updated_comp is not None else datetime.datetime.now()
+                        col_range, col_date, col_time = st.columns([2, 1, 1])
+                        with col_range:
+                            selected_range = st.selectbox(
+                                "Trend time range", list(time_range_options.keys()),
+                                index=1, key="mill_trend_range"
+                            )
+                        with col_date:
+                            anchor_date = st.date_input(
+                                "Anchor date", value=anchor_default.date(), key="trend_anchor_date"
+                            )
+                        with col_time:
+                            anchor_time_val = st.time_input(
+                                "Anchor time", value=anchor_default.time(), key="trend_anchor_time"
+                            )
+                        hours_back, resample_min = time_range_options[selected_range]
+                        anchor_dt = datetime.datetime.combine(anchor_date, anchor_time_val)
+                        start_dt = anchor_dt - datetime.timedelta(hours=hours_back)
+
+                        # Row 3: Select Property (horizontal radio)
+                        selected_prop = st.radio(
+                            "Select Property", available_props, horizontal=True, key="mill_prop_radio"
+                        )
+
+                        if selected_mills_prop:
+                            bar_colors = ["#4C8BF5", "#E8694A", "#56B37F", "#F5C842", "#9B6CF5", "#F5874C"]
+
+                            # ── Chart 1: Single-point bar at anchor time ──────
+                            @st.cache_data(ttl=300)
+                            def load_mill_props_at_anchor(_db, anchor_dt):
+                                engine = create_engine(_db)
+                                query = text("""
+                                    SELECT DISTINCT ON (mill_num)
+                                        mill_num, time, mill_composition_properties
+                                    FROM mill_feed
+                                    WHERE time <= :anchor
+                                    ORDER BY mill_num, time DESC
+                                """)
+                                with engine.connect() as conn:
+                                    df = pd.read_sql(query, conn, params={'anchor': anchor_dt})
+                                if df.empty:
+                                    return {}
+                                result = {}
+                                for _, row in df.iterrows():
+                                    val = row['mill_composition_properties']
+                                    props = val if isinstance(val, dict) else (json.loads(val) if isinstance(val, str) and val else {})
+                                    if props:
+                                        result[f"Mill #{int(row['mill_num'])}"] = props
+                                return result
+
+                            mill_props_anchor = load_mill_props_at_anchor(DB_CONNECTION, anchor_dt)
+                            bar_x = [m for m in selected_mills_prop if selected_prop in mill_props_anchor.get(m, {})]
+                            bar_y = [mill_props_anchor[m][selected_prop] for m in bar_x]
+                            ts_label = anchor_dt.strftime('%I:%M:%S %p %d-%m-%Y')
+
+                            @st.cache_data(ttl=300)
+                            def load_mill_properties_ts(_db, start_dt, end_dt):
+                                engine = create_engine(_db)
+                                query = text("""
+                                    SELECT time, mill_num, mill_composition_properties
+                                    FROM mill_feed
+                                    WHERE time >= :start AND time <= :end
+                                    ORDER BY time, mill_num
+                                """)
+                                with engine.connect() as conn:
+                                    df = pd.read_sql(query, conn, params={'start': start_dt, 'end': end_dt})
+                                if df.empty:
+                                    return df
+                                df['time'] = pd.to_datetime(df['time'])
+                                df['mill_composition_properties'] = df['mill_composition_properties'].apply(
+                                    lambda x: x if isinstance(x, dict) else (json.loads(x) if isinstance(x, str) and x else {})
+                                )
+                                return df
+
+                            ts_df = load_mill_properties_ts(DB_CONNECTION, start_dt, anchor_dt)
+
+                            # Pre-process trend traces before creating the subplot so we know
+                            # whether data exists and can size the figure accordingly
+                            trend_traces = []
+                            if not ts_df.empty:
+                                for idx, mill_name in enumerate(selected_mills_prop):
+                                    mill_num_val = int(mill_name.split("#")[1])
+                                    m_df = ts_df[ts_df['mill_num'] == mill_num_val].copy()
+                                    if m_df.empty:
+                                        continue
+                                    m_df['prop_val'] = m_df['mill_composition_properties'].apply(
+                                        lambda x: x.get(selected_prop) if isinstance(x, dict) else None
+                                    )
+                                    m_df = m_df.dropna(subset=['prop_val'])
+                                    if m_df.empty:
+                                        continue
+                                    m_df = (m_df.set_index('time')
+                                              .resample(f'{resample_min}min')['prop_val']
+                                              .mean().reset_index())
+                                    if not m_df.empty:
+                                        trend_traces.append((mill_name, idx, m_df))
+
+                            trend_has_data = bool(trend_traces)
+
+                            # Row heights and figure height depend on data availability
+                            if trend_has_data:
+                                row_h = [0.28, 0.72]
+                                fig_height = 560
+                            else:
+                                row_h = [0.65, 0.35]
+                                fig_height = 320
+
+                            # ── Combined subplot: bar (top) + line/message (bottom) ───
+                            fig_combined = make_subplots(
+                                rows=2, cols=1,
+                                row_heights=row_h,
+                                vertical_spacing=0.06,
+                                shared_xaxes=False,
+                            )
+
+                            # Row 1: bar chart
+                            for idx, (mill, val) in enumerate(zip(bar_x, bar_y)):
+                                fig_combined.add_trace(go.Bar(
+                                    x=[mill], y=[val],
+                                    name=mill,
+                                    marker_color=bar_colors[idx % len(bar_colors)],
+                                    text=[f"<b>{val:.2f}</b>"],
+                                    textposition="outside",
+                                    width=0.4,
+                                    showlegend=False,
+                                ), row=1, col=1)
+
+                            # Row 2: trend lines or no-data message
+                            if trend_has_data:
+                                for mill_name, idx, m_df in trend_traces:
+                                    fig_combined.add_trace(go.Scatter(
+                                        x=m_df['time'],
+                                        y=m_df['prop_val'],
+                                        mode='lines+markers',
+                                        name=mill_name,
+                                        line=dict(color=bar_colors[idx % len(bar_colors)], width=2),
+                                        marker=dict(size=6),
+                                    ), row=2, col=1)
+                            else:
+                                row2_center = row_h[1] * (1 - 0.06) / 2
+                                fig_combined.add_annotation(
+                                    text=(f"No trend data for "
+                                          f"{start_dt.strftime('%d-%m-%Y %H:%M')} → "
+                                          f"{anchor_dt.strftime('%d-%m-%Y %H:%M')}"),
+                                    xref="paper", yref="paper",
+                                    x=0.5, y=row2_center,
+                                    showarrow=False,
+                                    font=dict(size=13, color="#888888"),
+                                    xanchor='center', yanchor='middle',
+                                )
+                                fig_combined.update_yaxes(visible=False, row=2, col=1)
+                                fig_combined.update_xaxes(visible=False, row=2, col=1)
+
+                            # Subtitle y position: just below main title regardless of fig height
+                            plot_h_px = fig_height - 85 - 50
+                            subtitle_top_px = 0.03 * fig_height + 17 + 8
+                            subtitle_y = (fig_height - subtitle_top_px - 50) / plot_h_px
+
+                            fig_combined.update_layout(
+                                title=dict(
+                                    text=f"Mill Feed Weighted - {selected_prop}",
+                                    font=dict(size=17),
+                                    y=0.97,
+                                    yanchor='top',
+                                ),
+                                template="plotly_dark",
+                                height=fig_height,
+                                hovermode="x unified",
+                                legend_title="Mills",
+                                bargap=0.35,
+                                margin=dict(t=85, b=50, l=60, r=20),
+                            )
+                            fig_combined.add_annotation(
+                                text=f"<b>Bars: snapshot at {ts_label}  ·  Trend: {selected_range}</b>",
+                                xref="paper", yref="paper",
+                                x=0, y=subtitle_y,
+                                showarrow=False,
+                                font=dict(size=14),
+                                xanchor='left', yanchor='top',
+                            )
+                            fig_combined.update_yaxes(title_text=selected_prop, row=1, col=1,
+                                                      range=[0, max(bar_y) * 1.3] if bar_y else [0, 1])
+                            fig_combined.update_xaxes(title_text="Mills", row=1, col=1)
+                            if trend_has_data:
+                                fig_combined.update_yaxes(title_text=selected_prop, row=2, col=1)
+                                fig_combined.update_xaxes(title_text="Time", row=2, col=1)
+
+                            st.plotly_chart(fig_combined, use_container_width=True)
+
             except Exception as e:
                 st.error(f"Error loading mill composition data: {e}")
-
-                # Example mill data if real data is not available
-                st.info("Using example data for mill composition")
-
-                # Function to generate example mill data
-                def generate_mill_data():
-                    mills = ["Mill #1", "Mill #2", "Mill #3", "Mill #4", "Mill #5", "Mill #6"]
-                    components = ["WST:0898:0008", "EST:0826:0047", "ROM", "WST:0898:0004", "EST:0826:0043", "Other"]
-
-                    # Random data for each mill and component
-                    np.random.seed(42)
-                    data = {mill: {} for mill in mills}
-
-                    for mill in mills:
-                        total = 100 if "percentage" in display_option else 10000
-                        values = np.random.dirichlet(np.ones(len(components))) * total
-                        for i, component in enumerate(components):
-                            data[mill][component] = values[i]
-
-                    return data, components
-
-                # Generate example data
-                mill_compositions, components = generate_mill_data()
-
-                # Create consistent colors for components
-                colorscale = [
-                    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-                    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
-                ]
-                component_colors = {component: colorscale[i % len(colorscale)] for i, component in
-                                    enumerate(components)}
-
-                # Create bar chart
-                fig_mill_ore = go.Figure()
-                mills = list(mill_compositions.keys())
-
-                # Create hover texts
-                hover_texts = []
-                for mill in mills:
-                    compositions = mill_compositions.get(mill, {})
-
-                    hover_text = f"<b>{mill}</b><br>"
-                    hover_text += "<br>".join(
-                        [f"{comp}: {round(compositions.get(comp, 0), 2)} {'tons' if 'tons' in display_option else '%'}"
-                         for comp in components if comp in compositions]
-                    )
-                    hover_texts.append(hover_text)
-
-                # Add traces for each component
-                for component in components:
-                    # Get values for this component across mills
-                    y_values = [mill_compositions[mill].get(component, 0) for mill in mills]
-
-                    fig_mill_ore.add_trace(
-                        go.Bar(
-                            x=mills,
-                            y=y_values,
-                            name=component,
-                            marker_color=component_colors.get(component, "#CCCCCC"),
-                            text=[component for v in y_values],  # Show all component labels
-                            textposition="inside"
-                        )
-                    )
-
-                # Add invisible traces for better hover
-                for i, mill in enumerate(mills):
-                    fig_mill_ore.add_trace(
-                        go.Scatter(
-                            x=[mill],
-                            y=[0],
-                            mode="markers",
-                            marker=dict(size=0, opacity=0),
-                            hoverinfo="text",
-                            hovertext=hover_texts[i],
-                            showlegend=False
-                        )
-                    )
-
-                # Update layout
-                value_type = "Tons" if "tons" in display_option else "Percentage (%)"
-                fig_mill_ore.update_layout(
-                    title=f"Mill Composition (Example Data) - {value_type} - Last updated: {datetime.datetime.now().strftime('%I:%M:%S %p %d-%m-%Y')}",
-                    xaxis_title="Mills",
-                    yaxis_title=f"Composition ({value_type})",
-                    barmode='stack',
-                    template="plotly_dark",
-                    legend_title="Components",
-                    hovermode="closest",
-                    bargap=0.2,
-                    # Same fixes here for the example data visualization
-                    margin=dict(r=150),  # Add right margin to make room for legend
-                    legend=dict(
-                        orientation="v",  # Vertical legend
-                        yanchor="top",  # Anchor to top
-                        y=1,  # Position at top
-                        xanchor="left",  # Change from "right" to "left"
-                        x=1.05,  # Position slightly to the right of the chart (was 1.15)
-                        # bgcolor="rgba(0,0,0,0.1)",  # Semi-transparent background
-                        # bordercolor="rgba(255,255,255,0.2)",
-                        # borderwidth=1
-                    )
-                )
-
-                # If showing percentage, set y-axis range to 0-100
-                if "percentage" in display_option:
-                    fig_mill_ore.update_layout(yaxis=dict(range=[0, 100]))
-
-                st.plotly_chart(fig_mill_ore, use_container_width=True)
+                st.warning("No data available. Please check database connection.")
 
             # 3. Stockpile data visualization - Moved below mill composition
             def generate_stockpile_data(dates):

@@ -58,32 +58,37 @@ def get_db_engine():
 def ensure_schema(engine):
     ddl = """
     CREATE TABLE IF NOT EXISTS mill_feed (
-        time                     TIMESTAMP NOT NULL,
-        mill_num                 INTEGER   NOT NULL,
-        mill_throughput          DOUBLE PRECISION,
-        calculated_throughput    DOUBLE PRECISION,
-        mill_composition_numbers INTEGER,
-        mill_composition_tons    JSONB,
-        mill_composition_pct     JSONB,
-        silo1_num                INTEGER,
-        silo1_discharge          DOUBLE PRECISION,
-        silo1_composition_tons   JSONB,
-        silo1_composition_pct    JSONB,
-        silo2_num                INTEGER,
-        silo2_discharge          DOUBLE PRECISION,
-        silo2_composition_tons   JSONB,
-        silo2_composition_pct    JSONB,
-        silo3_num                INTEGER,
-        silo3_discharge          DOUBLE PRECISION,
-        silo3_composition_tons   JSONB,
-        silo3_composition_pct    JSONB,
+        time                          TIMESTAMP NOT NULL,
+        mill_num                      INTEGER   NOT NULL,
+        mill_throughput               DOUBLE PRECISION,
+        calculated_throughput         DOUBLE PRECISION,
+        mill_composition_numbers      INTEGER,
+        mill_composition_tons         JSONB,
+        mill_composition_pct          JSONB,
+        mill_composition_properties   JSONB,
+        silo1_num                     INTEGER,
+        silo1_discharge               DOUBLE PRECISION,
+        silo1_composition_tons        JSONB,
+        silo1_composition_pct         JSONB,
+        silo2_num                     INTEGER,
+        silo2_discharge               DOUBLE PRECISION,
+        silo2_composition_tons        JSONB,
+        silo2_composition_pct         JSONB,
+        silo3_num                     INTEGER,
+        silo3_discharge               DOUBLE PRECISION,
+        silo3_composition_tons        JSONB,
+        silo3_composition_pct         JSONB,
         PRIMARY KEY (time, mill_num)
     );
     CREATE INDEX IF NOT EXISTS idx_mill_feed_time ON mill_feed (time);
     CREATE INDEX IF NOT EXISTS idx_mill_feed_num  ON mill_feed (mill_num);
     """
+    migrate = """
+    ALTER TABLE IF EXISTS mill_feed ADD COLUMN IF NOT EXISTS mill_composition_properties JSONB;
+    """
     with engine.connect() as conn:
         conn.execute(text(ddl))
+        conn.execute(text(migrate))
         conn.commit()
     print("✅ mill_feed table ready")
 
@@ -121,7 +126,7 @@ def write_to_pg(engine, records, overwrite, start_date, end_date):
 
     # Serialize JSON columns to strings
     json_cols = [
-        'mill_composition_tons', 'mill_composition_pct',
+        'mill_composition_tons', 'mill_composition_pct', 'mill_composition_properties',
         'silo1_composition_tons', 'silo1_composition_pct',
         'silo2_composition_tons', 'silo2_composition_pct',
         'silo3_composition_tons', 'silo3_composition_pct',
@@ -181,7 +186,8 @@ def load_silo_data(engine, start_date, end_date):
             SELECT time, silo_num,
                    discharge_amount,
                    discharge_composition_tons,
-                   discharge_composition_pct
+                   discharge_composition_pct,
+                   discharge_composition_properties
             FROM silo_tracking
             WHERE time >= :start AND time <= :end
             ORDER BY time, silo_num
@@ -193,10 +199,11 @@ def load_silo_data(engine, start_date, end_date):
     # Parse JSON columns
     # JSONB columns come back as Python dicts when read via SQLAlchemy/psycopg2;
     # fall back to json.loads() only if the value is a plain string (legacy path).
-    for col in ['discharge_composition_tons', 'discharge_composition_pct']:
-        df[col] = df[col].apply(
-            lambda x: x if isinstance(x, dict) else (json.loads(x) if isinstance(x, str) and x else {})
-        )
+    for col in ['discharge_composition_tons', 'discharge_composition_pct', 'discharge_composition_properties']:
+        if col in df.columns:
+            df[col] = df[col].apply(
+                lambda x: x if isinstance(x, dict) else (json.loads(x) if isinstance(x, str) and x else {})
+            )
 
     # Group into a dict keyed by silo number
     silo_tables = {}
@@ -218,7 +225,8 @@ def get_silo_data_for_mill(silo_tables, mill_time, silo_numbers, mill_num=1):
             silo_data[silo_num] = {
                 'discharge_amount': 0,
                 'discharge_composition_tons': {},
-                'discharge_composition_pct': {}
+                'discharge_composition_pct': {},
+                'discharge_composition_properties': {}
             }
             continue
 
@@ -229,13 +237,15 @@ def get_silo_data_for_mill(silo_tables, mill_time, silo_numbers, mill_num=1):
             silo_data[silo_num] = {
                 'discharge_amount': row['discharge_amount'].iloc[0],
                 'discharge_composition_tons': row['discharge_composition_tons'].iloc[0],
-                'discharge_composition_pct': row['discharge_composition_pct'].iloc[0]
+                'discharge_composition_pct': row['discharge_composition_pct'].iloc[0],
+                'discharge_composition_properties': row['discharge_composition_properties'].iloc[0] if 'discharge_composition_properties' in row.columns else {}
             }
         else:
             silo_data[silo_num] = {
                 'discharge_amount': 0,
                 'discharge_composition_tons': {},
-                'discharge_composition_pct': {}
+                'discharge_composition_pct': {},
+                'discharge_composition_properties': {}
             }
 
     return silo_data
@@ -256,6 +266,27 @@ def calculate_mill_compositions(silo_data):
         'composition_numbers': len(total_composition),
         'composition_tons': total_composition,
         'composition_pct': composition_pct
+    }
+
+
+def aggregate_mill_properties(silo_data):
+    """Weighted average of silo discharge_composition_properties by discharge tonnage."""
+    prop_numerator = {}
+    prop_denominator = {}
+
+    for silo_info in silo_data.values():
+        tons = silo_info.get('discharge_amount', 0) or 0
+        props = silo_info.get('discharge_composition_properties') or {}
+        if tons <= 0 or not props:
+            continue
+        for k, v in props.items():
+            if v is not None:
+                prop_numerator[k] = prop_numerator.get(k, 0.0) + tons * v
+                prop_denominator[k] = prop_denominator.get(k, 0.0) + tons
+
+    return {
+        k: round(prop_numerator[k] / prop_denominator[k], 4)
+        for k in prop_numerator if prop_denominator.get(k, 0) > 0
     }
 
 
@@ -303,6 +334,7 @@ def generate_mill_feed_data(start_date, end_date, overwrite=False):
                 'mill_composition_numbers': mill_comp['composition_numbers'],
                 'mill_composition_tons': mill_comp['composition_tons'],
                 'mill_composition_pct': mill_comp['composition_pct'],
+                'mill_composition_properties': aggregate_mill_properties(silo_data),
             }
 
             for idx, silo_num in enumerate(silo_numbers, start=1):

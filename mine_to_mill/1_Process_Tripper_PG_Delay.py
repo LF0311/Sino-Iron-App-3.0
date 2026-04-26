@@ -81,14 +81,10 @@ def ensure_schema(engine):
         cvr2_bench_id                       DOUBLE PRECISION,
         cvr1_shot_id                        VARCHAR(100),
         cvr2_shot_id                        VARCHAR(100),
-        cvr1_ore_waste_block                TEXT,
-        cvr2_ore_waste_block                TEXT,
         cvr1_end_processor_group_reporting  TEXT,
         cvr2_end_processor_group_reporting  TEXT,
         cvr1_end_processor_group            TEXT,
         cvr2_end_processor_group            TEXT,
-        cvr1_end_processor                  VARCHAR(20),
-        cvr2_end_processor                  VARCHAR(20),
         cvr1_material                       TEXT,
         cvr2_material                       TEXT,
         cvr1_truck_payload_t                DOUBLE PRECISION,
@@ -130,6 +126,17 @@ def ensure_schema(engine):
     with engine.connect() as conn:
         conn.execute(text(ddl))
         conn.commit()
+        for sql in [
+            "ALTER TABLE tripper_tracking DROP COLUMN IF EXISTS cvr1_ore_waste_block",
+            "ALTER TABLE tripper_tracking DROP COLUMN IF EXISTS cvr2_ore_waste_block",
+            "ALTER TABLE tripper_tracking DROP COLUMN IF EXISTS cvr1_end_processor",
+            "ALTER TABLE tripper_tracking DROP COLUMN IF EXISTS cvr2_end_processor",
+        ]:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception as e:
+                print(f"  Warning (tripper_tracking migration): {e}")
     print("✅ tripper_tracking table ready")
 
 
@@ -225,8 +232,8 @@ def load_cvr_data(engine, cvr_name, start_date, end_date, trans_delay):
     query = text("""
         SELECT time, instant_total_ore, dump_time,
                date, shift, truck, dig_unit, source,
-               bench_id, shot_id, ore_waste_block,
-               end_processor_group_reporting, end_processor_group, end_processor,
+               bench_id, shot_id,
+               end_processor_group_reporting, end_processor_group,
                material, truck_payload_t, adjusted_truck_payload_t,
                start_timestamp, end_timestamp,
                stratigraphy, geomet_domain, imt_p80,
@@ -299,10 +306,8 @@ def process_tripper_for_date(engine, tripper_name, day_start, day_end, belt_data
                'cvr1_source': pd.NA, 'cvr2_source': pd.NA,
                'cvr1_bench_id': pd.NA, 'cvr2_bench_id': pd.NA,
                'cvr1_shot_id': pd.NA, 'cvr2_shot_id': pd.NA,
-               'cvr1_ore_waste_block': pd.NA, 'cvr2_ore_waste_block': pd.NA,
                'cvr1_end_processor_group_reporting': pd.NA, 'cvr2_end_processor_group_reporting': pd.NA,
                'cvr1_end_processor_group': pd.NA, 'cvr2_end_processor_group': pd.NA,
-               'cvr1_end_processor': pd.NA, 'cvr2_end_processor': pd.NA,
                'cvr1_material': pd.NA, 'cvr2_material': pd.NA,
                'cvr1_truck_payload_t': pd.NA, 'cvr2_truck_payload_t': pd.NA,
                'cvr1_adjusted_truck_payload_t': pd.NA, 'cvr2_adjusted_truck_payload_t': pd.NA,
@@ -345,10 +350,8 @@ def process_tripper_for_date(engine, tripper_name, day_start, day_end, belt_data
                             row[f'{prefix}source'] = r.get('source', pd.NA)
                             row[f'{prefix}bench_id'] = r.get('bench_id', pd.NA)
                             row[f'{prefix}shot_id'] = r.get('shot_id', pd.NA)
-                            row[f'{prefix}ore_waste_block'] = r.get('ore_waste_block', pd.NA)
                             row[f'{prefix}end_processor_group_reporting'] = r.get('end_processor_group_reporting', pd.NA)
                             row[f'{prefix}end_processor_group'] = r.get('end_processor_group', pd.NA)
-                            row[f'{prefix}end_processor'] = r.get('end_processor', pd.NA)
                             row[f'{prefix}material'] = r.get('material', pd.NA)
                             row[f'{prefix}truck_payload_t'] = r.get('truck_payload_t', pd.NA)
                             row[f'{prefix}adjusted_truck_payload_t'] = r.get('adjusted_truck_payload_t', pd.NA)

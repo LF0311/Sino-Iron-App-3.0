@@ -70,10 +70,8 @@ def ensure_schema(engine):
         source                         VARCHAR(100),
         bench_id                       DOUBLE PRECISION,
         shot_id                        VARCHAR(100),
-        ore_waste_block                TEXT,
         end_processor_group_reporting  TEXT,
         end_processor_group            TEXT,
-        end_processor                  VARCHAR(20),
         material                       TEXT,
         truck_payload_t                DOUBLE PRECISION,
         adjusted_truck_payload_t       DOUBLE PRECISION,
@@ -99,6 +97,15 @@ def ensure_schema(engine):
     with engine.connect() as conn:
         conn.execute(text(ddl))
         conn.commit()
+        for sql in [
+            "ALTER TABLE cvr_tracking DROP COLUMN IF EXISTS ore_waste_block",
+            "ALTER TABLE cvr_tracking DROP COLUMN IF EXISTS end_processor",
+        ]:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception as e:
+                print(f"  Warning (cvr_tracking migration): {e}")
     print("✅ cvr_tracking table ready")
 
 
@@ -262,8 +269,8 @@ def calculate_interval_time_with_ore(cvr_data, start_time, truck_payload):
 # Columns from truck_cycles to carry through to cvr_tracking output
 TRUCK_COLS_TO_KEEP = [
     'date', 'shift', 'truck', 'dig_unit', 'source',
-    'bench_id', 'shot_id', 'ore_waste_block',
-    'end_processor_group_reporting', 'end_processor_group', 'end_processor',
+    'bench_id', 'shot_id',
+    'end_processor_group_reporting', 'end_processor_group',
     'material', 'truck_payload_t', 'adjusted_truck_payload_t',
     'start_timestamp', 'end_timestamp',
     'stratigraphy', 'geomet_domain', 'imt_p80',

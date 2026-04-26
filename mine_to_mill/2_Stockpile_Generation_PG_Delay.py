@@ -87,10 +87,12 @@ def ensure_schema(engine):
     CREATE INDEX IF NOT EXISTS idx_silo_tracking_num  ON silo_tracking (silo_num);
     """
     migrate = """
-    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS feed_amount         DOUBLE PRECISION;
-    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS composition_number  INTEGER;
-    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS composition_tons    JSONB;
-    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS composition_pct     JSONB;
+    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS feed_amount                        DOUBLE PRECISION;
+    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS composition_number                 INTEGER;
+    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS composition_tons                   JSONB;
+    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS composition_pct                    JSONB;
+    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS discharge_composition_properties   JSONB;
+    ALTER TABLE IF EXISTS silo_tracking ADD COLUMN IF NOT EXISTS composition_properties             JSONB;
     """
     with engine.connect() as conn:
         conn.execute(text(ddl))
@@ -132,7 +134,9 @@ def write_to_pg(engine, records, overwrite, start_date, end_date):
 
     # Serialize JSON columns to strings
     json_cols = ['discharge_composition_tons', 'discharge_composition_pct',
-                 'composition_tons', 'composition_pct']
+                 'discharge_composition_properties',
+                 'composition_tons', 'composition_pct',
+                 'composition_properties']
     for col in json_cols:
         if col in df.columns:
             df[col] = df[col].apply(
@@ -221,10 +225,8 @@ def load_data_for_date_range(engine, start_date, end_date):
                    cvr1_source, cvr2_source,
                    cvr1_bench_id, cvr2_bench_id,
                    cvr1_shot_id, cvr2_shot_id,
-                   cvr1_ore_waste_block, cvr2_ore_waste_block,
                    cvr1_end_processor_group_reporting, cvr2_end_processor_group_reporting,
                    cvr1_end_processor_group, cvr2_end_processor_group,
-                   cvr1_end_processor, cvr2_end_processor,
                    cvr1_material, cvr2_material,
                    cvr1_truck_payload_t, cvr2_truck_payload_t,
                    cvr1_adjusted_truck_payload_t, cvr2_adjusted_truck_payload_t,
@@ -490,8 +492,69 @@ def update_silo(silo, feed_amount, feed_data, discharge_amount, discharge_data):
     return discharge_composition, composition_tons, composition_pct, composition_number
 
 
+_PROP_MAP = {
+    'MagFe%':         ('cvr1_magfe_pct',            'cvr2_magfe_pct'),
+    'DTR%':           ('cvr1_dtr_pct',               'cvr2_dtr_pct'),
+    'Fe_Head%':       ('cvr1_fe_head_pct',           'cvr2_fe_head_pct'),
+    'MagFe_DTR%':     ('cvr1_magfe_dtr_pct',         'cvr2_magfe_dtr_pct'),
+    'SiO2_DTR%':      ('cvr1_sio2_concentrate_pct',  'cvr2_sio2_concentrate_pct'),
+    'Fe_Concentrate%':('cvr1_fe_concentrate_pct',    'cvr2_fe_concentrate_pct'),
+    'P80_IMT_um':     ('cvr1_imt_p80',               'cvr2_imt_p80'),
+}
+
+
+def build_source_properties_lookup(tripper1_data, tripper2_data):
+    """Average CVR properties per ore source across all tripper data."""
+    rows = []
+    for tdf in [tripper1_data, tripper2_data]:
+        for cvr_prefix, source_col in [('cvr1_', 'cvr1_source'), ('cvr2_', 'cvr2_source')]:
+            if source_col not in tdf.columns:
+                continue
+            sub = tdf[[source_col]].rename(columns={source_col: 'source'}).copy()
+            for prop_name, (c1, c2) in _PROP_MAP.items():
+                col = c1 if cvr_prefix == 'cvr1_' else c2
+                sub[prop_name] = pd.to_numeric(tdf[col], errors='coerce') if col in tdf.columns else float('nan')
+            rows.append(sub)
+
+    if not rows:
+        return {}
+
+    combined = pd.concat(rows, ignore_index=True)
+    combined = combined[combined['source'].notna()]
+    result = {}
+    for source, grp in combined.groupby('source'):
+        result[str(source)] = {
+            k: float(grp[k].dropna().mean())
+            for k in _PROP_MAP if k in grp.columns and not grp[k].dropna().empty
+        }
+    return result
+
+
+def calculate_weighted_properties(composition_tons, source_props):
+    """Weighted average ore properties by tonnage across ore sources."""
+    if not composition_tons or not source_props:
+        return {}
+
+    numerator = {k: 0.0 for k in _PROP_MAP}
+    denominator = {k: 0.0 for k in _PROP_MAP}
+
+    for source, tons in composition_tons.items():
+        if tons <= 0:
+            continue
+        props = source_props.get(str(source), {})
+        for k in _PROP_MAP:
+            if k in props and not (isinstance(props[k], float) and props[k] != props[k]):
+                numerator[k] += tons * props[k]
+                denominator[k] += tons
+
+    return {
+        k: round(numerator[k] / denominator[k], 4)
+        for k in _PROP_MAP if denominator[k] > 0
+    }
+
+
 def process_time_step(current_time, silos, tripper1_data, tripper2_data,
-                      silo_data, mill_data):
+                      silo_data, mill_data, source_props=None):
     records = []
 
     for mill_num, silo_nums in MILL_TO_SILOS.items():
@@ -523,6 +586,7 @@ def process_time_step(current_time, silos, tripper1_data, tripper2_data,
             if total_disc > 0:
                 disc_pct = {k: v / total_disc * 100 for k, v in discharge_composition.items()}
 
+            sp = source_props or {}
             records.append({
                 'time': current_time,
                 'silo_num': silo_num,
@@ -532,9 +596,11 @@ def process_time_step(current_time, silos, tripper1_data, tripper2_data,
                 'discharge_amount': discharge_amount,
                 'discharge_composition_tons': discharge_composition,
                 'discharge_composition_pct': disc_pct,
+                'discharge_composition_properties': calculate_weighted_properties(discharge_composition, sp),
                 'composition_number': composition_number,
                 'composition_tons': composition_tons,
                 'composition_pct': composition_pct,
+                'composition_properties': calculate_weighted_properties(composition_tons, sp),
                 'layers_count': len(silos[silo_num]['layers']),
             })
 
@@ -552,6 +618,9 @@ def generate_silo_tracking_data(start_date, end_date, overwrite=False):
 
     print(f"Tripper1: {len(tripper1_data)} rows  Tripper2: {len(tripper2_data)} rows")
     print(f"Silo data: {len(silo_data)} rows  Mill data: {len(mill_data)} rows")
+
+    source_props = build_source_properties_lookup(tripper1_data, tripper2_data)
+    print(f"✅ Source properties lookup built: {len(source_props)} ore sources")
 
     initial_levels = get_initial_silo_levels(silo_data, start_date)
     silos = initialize_silos(initial_levels)
@@ -572,7 +641,7 @@ def generate_silo_tracking_data(start_date, end_date, overwrite=False):
             records = process_time_step(
                 current_time, silos,
                 tripper1_data, tripper2_data,
-                silo_data, mill_data
+                silo_data, mill_data, source_props
             )
             day_records.extend(records)
 
