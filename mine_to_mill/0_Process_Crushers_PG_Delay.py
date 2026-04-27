@@ -68,7 +68,7 @@ def ensure_schema(engine):
         truck                          VARCHAR(20),
         dig_unit                       VARCHAR(50),
         source                         VARCHAR(100),
-        bench_id                       DOUBLE PRECISION,
+        bench_id                       VARCHAR(100),
         shot_id                        VARCHAR(100),
         end_processor_group_reporting  TEXT,
         end_processor_group            TEXT,
@@ -100,6 +100,7 @@ def ensure_schema(engine):
         for sql in [
             "ALTER TABLE cvr_tracking DROP COLUMN IF EXISTS ore_waste_block",
             "ALTER TABLE cvr_tracking DROP COLUMN IF EXISTS end_processor",
+            "ALTER TABLE cvr_tracking ALTER COLUMN bench_id TYPE VARCHAR(100) USING bench_id::VARCHAR",
         ]:
             try:
                 conn.execute(text(sql))
@@ -137,7 +138,7 @@ def write_to_pg(engine, df, overwrite, start_date, end_date):
                 return
         df = df.drop(columns=['key'], errors='ignore')
 
-    chunk = 1000
+    chunk = 200
     for i in range(0, len(df), chunk):
         df.iloc[i:i + chunk].to_sql(
             'cvr_tracking', engine, if_exists='append', index=False, method='multi'
@@ -416,7 +417,7 @@ def process_date_range(start_date, end_date, overwrite=False):
 
 
 if __name__ == "__main__":
-    start_date = datetime(2025, 4,  1, 0, 0, 0)
-    end_date   = datetime(2025, 4, 14, 23, 59, 59)
+    start_date = datetime(2026, 4,  1, 0, 0, 0)
+    end_date   = datetime(2026, 4, 14, 23, 59, 59)
     overwrite  = True
     process_date_range(start_date, end_date, overwrite)

@@ -77,8 +77,8 @@ def ensure_schema(engine):
         cvr2_dig_unit                       VARCHAR(50),
         cvr1_source                         VARCHAR(100),
         cvr2_source                         VARCHAR(100),
-        cvr1_bench_id                       DOUBLE PRECISION,
-        cvr2_bench_id                       DOUBLE PRECISION,
+        cvr1_bench_id                       VARCHAR(100),
+        cvr2_bench_id                       VARCHAR(100),
         cvr1_shot_id                        VARCHAR(100),
         cvr2_shot_id                        VARCHAR(100),
         cvr1_end_processor_group_reporting  TEXT,
@@ -131,6 +131,8 @@ def ensure_schema(engine):
             "ALTER TABLE tripper_tracking DROP COLUMN IF EXISTS cvr2_ore_waste_block",
             "ALTER TABLE tripper_tracking DROP COLUMN IF EXISTS cvr1_end_processor",
             "ALTER TABLE tripper_tracking DROP COLUMN IF EXISTS cvr2_end_processor",
+            "ALTER TABLE tripper_tracking ALTER COLUMN cvr1_bench_id TYPE VARCHAR(100) USING cvr1_bench_id::VARCHAR",
+            "ALTER TABLE tripper_tracking ALTER COLUMN cvr2_bench_id TYPE VARCHAR(100) USING cvr2_bench_id::VARCHAR",
         ]:
             try:
                 conn.execute(text(sql))
@@ -432,7 +434,7 @@ def process_date_range(start_date, end_date, overwrite=False):
 
 
 if __name__ == "__main__":
-    start_date = datetime(2025, 4,  1, 0, 0, 0)
-    end_date   = datetime(2025, 4, 14, 23, 59, 59)
-    overwrite  = False
+    start_date = datetime(2026, 4,  1, 0, 0, 0)
+    end_date   = datetime(2026, 4, 14, 23, 59, 59)
+    overwrite  = True
     process_date_range(start_date, end_date, overwrite)
