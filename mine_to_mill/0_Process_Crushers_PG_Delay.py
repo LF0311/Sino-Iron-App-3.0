@@ -115,28 +115,20 @@ def write_to_pg(engine, df, overwrite, start_date, end_date):
     if df.empty:
         return
 
-    if overwrite:
-        with engine.connect() as conn:
-            conn.execute(text(
-                "DELETE FROM cvr_tracking WHERE time >= :t1 AND time <= :t2"
-            ), {'t1': start_date, 't2': end_date})
-            conn.commit()
-        print(f"  [overwrite] Deleted existing rows for {start_date.date()} ~ {end_date.date()}")
-    else:
-        with engine.connect() as conn:
-            existing = pd.read_sql(
-                text("SELECT time, cvr_name FROM cvr_tracking WHERE time >= :t1 AND time <= :t2"),
-                conn, params={'t1': start_date, 't2': end_date}
-            )
-        if not existing.empty:
-            existing['key'] = existing['time'].astype(str) + '_' + existing['cvr_name']
-            df['key'] = df['time'].astype(str) + '_' + df['cvr_name']
-            before = len(df)
-            df = df[~df['key'].isin(existing['key'])].drop(columns=['key'])
-            print(f"  Skipped existing: {before - len(df)} rows | New rows: {len(df)}")
-            if df.empty:
-                return
-        df = df.drop(columns=['key'], errors='ignore')
+    # Always delete the actual data range before inserting.
+    # Using df['time'].min/max (not the passed start_date/end_date) because
+    # process_cvr_data_for_date always generates a full day (00:00–23:59) regardless
+    # of the sub-day window passed by the auto-scheduler, so the delete range must
+    # match the data range to avoid primary-key conflicts on re-runs.
+    actual_min = df['time'].min()
+    actual_max = df['time'].max()
+
+    with engine.connect() as conn:
+        conn.execute(text(
+            "DELETE FROM cvr_tracking WHERE time >= :t1 AND time <= :t2"
+        ), {'t1': actual_min, 't2': actual_max})
+        conn.commit()
+    print(f"  Deleted existing rows: {actual_min} ~ {actual_max}")
 
     chunk = 200
     for i in range(0, len(df), chunk):
@@ -391,7 +383,8 @@ def process_date_range(start_date, end_date, overwrite=False):
     fail_count = 0
 
     while current_date < end_date:
-        next_date = min(current_date + timedelta(days=1), end_date)
+        next_midnight = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        next_date = min(next_midnight, end_date)
 
         print(f"\n{'=' * 80}")
         print(f"Processing data for {current_date.date()}")

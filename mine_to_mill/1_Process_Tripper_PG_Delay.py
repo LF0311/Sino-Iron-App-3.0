@@ -145,29 +145,14 @@ def ensure_schema(engine):
 def write_to_pg(engine, df, overwrite, start_date, end_date):
     if df.empty:
         return
-    if overwrite:
-        with engine.connect() as conn:
-            conn.execute(text(
-                "DELETE FROM tripper_tracking WHERE time >= :t1 AND time <= :t2"
-            ), {'t1': start_date, 't2': end_date})
-            conn.commit()
-        print(f"  [overwrite] Deleted existing rows for {start_date} – {end_date}")
-    else:
-        with engine.connect() as conn:
-            existing = pd.read_sql(
-                text("SELECT time, tripper_name FROM tripper_tracking "
-                     "WHERE time >= :t1 AND time <= :t2"),
-                conn, params={'t1': start_date, 't2': end_date}
-            )
-        if not existing.empty:
-            existing['key'] = existing['time'].astype(str) + '_' + existing['tripper_name']
-            df['key'] = df['time'].astype(str) + '_' + df['tripper_name']
-            before = len(df)
-            df = df[~df['key'].isin(existing['key'])].drop(columns=['key'])
-            print(f"  Skipped existing: {before - len(df)} rows | New rows to write: {len(df)}")
-            if df.empty:
-                return
-        df = df.drop(columns=['key'], errors='ignore')
+    actual_min = df['time'].min()
+    actual_max = df['time'].max()
+    with engine.connect() as conn:
+        conn.execute(text(
+            "DELETE FROM tripper_tracking WHERE time >= :t1 AND time <= :t2"
+        ), {'t1': actual_min, 't2': actual_max})
+        conn.commit()
+    print(f"  Deleted existing rows: {actual_min} ~ {actual_max}")
 
     # psycopg2 compatibility: convert np.float64/np.integer in object columns to native Python types
     df = df.where(df.notna(), None)
@@ -425,7 +410,7 @@ def process_date_range(start_date, end_date, overwrite=False):
             traceback.print_exc()
             fail_count += 1
 
-        current_date += timedelta(days=1)
+        current_date = day_start + timedelta(days=1)
 
     engine.dispose()
     print(f"\n{'=' * 80}")

@@ -312,8 +312,9 @@ class PIImporter:
 
     def _query_interpolated_single(self, tag, webid, start_dt, end_dt):
         params = {
-            'startTime': start_dt.strftime('%Y-%m-%dT%H:%M:%SZ'),
-            'endTime':   end_dt.strftime('%Y-%m-%dT%H:%M:%SZ'),
+            # PI server treats the time as UTC; passing +08:00 tells it our input is Beijing time
+            'startTime': start_dt.strftime('%Y-%m-%dT%H:%M:%S+08:00'),
+            'endTime':   end_dt.strftime('%Y-%m-%dT%H:%M:%S+08:00'),
             'interval':  PI_INTERVAL,
         }
         data = self._get(f"streams/{webid}/interpolated", params=params)
@@ -325,7 +326,9 @@ class PIImporter:
             if isinstance(val, dict):   # PI system status value — skip
                 continue
             try:
-                ts = pd.to_datetime(item['Timestamp']).tz_localize(None)
+                # PI returns UTC timestamps; convert to Beijing time before stripping tz
+                ts_utc = pd.to_datetime(item['Timestamp'])
+                ts = ts_utc.tz_convert("Asia/Shanghai").tz_localize(None)
                 rows.append({'ts': ts, 'value': float(val)})
             except Exception:
                 continue
@@ -467,10 +470,7 @@ class MinestarImporter:
                     conn.rollback()
                     if 'already exists' not in str(e):
                         print(f"  Warning adding column {col}: {e}")
-            # Migrate end_processor → end_processor_group_reporting, then drop redundant columns
             migrations = [
-                "UPDATE truck_cycles SET end_processor_group_reporting = end_processor "
-                "WHERE end_processor IS NOT NULL AND end_processor_group_reporting IS NULL",
                 "ALTER TABLE truck_cycles DROP COLUMN IF EXISTS end_processor",
                 "ALTER TABLE truck_cycles DROP COLUMN IF EXISTS ore_waste_block",
             ]

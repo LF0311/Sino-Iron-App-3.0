@@ -108,29 +108,14 @@ def write_to_pg(engine, records, overwrite, start_date, end_date):
     if df.empty:
         return
 
-    if overwrite:
-        with engine.connect() as conn:
-            conn.execute(text(
-                "DELETE FROM silo_tracking WHERE time >= :t1 AND time <= :t2"
-            ), {'t1': start_date, 't2': end_date})
-            conn.commit()
-        print(f"  [overwrite] Deleted existing rows for {start_date} – {end_date}")
-    else:
-        with engine.connect() as conn:
-            existing = pd.read_sql(
-                text("SELECT time, silo_num FROM silo_tracking "
-                     "WHERE time >= :t1 AND time <= :t2"),
-                conn, params={'t1': start_date, 't2': end_date}
-            )
-        if not existing.empty:
-            existing['key'] = existing['time'].astype(str) + '_' + existing['silo_num'].astype(str)
-            df['key'] = df['time'].astype(str) + '_' + df['silo_num'].astype(str)
-            before = len(df)
-            df = df[~df['key'].isin(existing['key'])].drop(columns=['key'])
-            print(f"  Skipped existing: {before - len(df)} rows | New rows to write: {len(df)}")
-            if df.empty:
-                return
-        df = df.drop(columns=['key'], errors='ignore')
+    actual_min = df['time'].min()
+    actual_max = df['time'].max()
+    with engine.connect() as conn:
+        conn.execute(text(
+            "DELETE FROM silo_tracking WHERE time >= :t1 AND time <= :t2"
+        ), {'t1': actual_min, 't2': actual_max})
+        conn.commit()
+    print(f"  Deleted existing rows: {actual_min} ~ {actual_max}")
 
     # Serialize JSON columns to strings
     json_cols = ['discharge_composition_tons', 'discharge_composition_pct',
@@ -649,7 +634,7 @@ def generate_silo_tracking_data(start_date, end_date, overwrite=False):
                 print(f"  Progress: {i + 1}/{len(time_range)}")
 
         write_to_pg(engine, day_records, overwrite, day_start, day_end)
-        current_date += timedelta(days=1)
+        current_date = day_start + timedelta(days=1)
 
     engine.dispose()
     print("\n✅ silo_tracking generation complete!")

@@ -24,12 +24,13 @@ import json
 from datetime import datetime, timedelta
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-ROOT_DIR      = os.path.dirname(os.path.abspath(__file__))
-MINE_TO_MILL  = os.path.join(ROOT_DIR, 'mine_to_mill')
-IMPORTER_PATH = os.path.join(MINE_TO_MILL, 'Import_PI_Minestar_to_PG_v1-1.py')
-DATA_DIR      = os.path.join(ROOT_DIR, 'data')
-STATE_FILE    = os.path.join(DATA_DIR, 'auto_scheduler_state.json')
-LOG_FILE      = os.path.join(DATA_DIR, 'auto_scheduler.log')
+ROOT_DIR              = os.path.dirname(os.path.abspath(__file__))
+MINE_TO_MILL          = os.path.join(ROOT_DIR, 'mine_to_mill')
+IMPORTER_PATH         = os.path.join(MINE_TO_MILL, 'Import_PI_Minestar_to_PG_v1-1.py')
+DATA_DIR              = os.path.join(ROOT_DIR, 'data')
+STATE_FILE            = os.path.join(DATA_DIR, 'auto_scheduler_state.json')
+LOG_FILE              = os.path.join(DATA_DIR, 'auto_scheduler.log')
+SCHEDULER_CONFIG_PATH = os.path.join(ROOT_DIR, 'resources', 'scheduler.config')
 
 os.system('')   # enable ANSI escape codes on Windows 10+
 sys.stdout.reconfigure(encoding='utf-8')
@@ -53,6 +54,26 @@ def row(text=''):
 
 def cls():
     os.system('cls' if os.name == 'nt' else 'clear')
+
+# ── Scheduler config ──────────────────────────────────────────────────────────
+def load_scheduler_config():
+    defaults = {
+        'interval_min':    30,
+        'buffer_min':       5,
+        'import_pi':      True,
+        'import_minestar': True,
+        'unattended':     False,
+    }
+    try:
+        with open(SCHEDULER_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        defaults.update(cfg)
+        print(f"✅ Scheduler config loaded: interval={defaults['interval_min']}min  "
+              f"buffer={defaults['buffer_min']}min  "
+              f"unattended={defaults['unattended']}")
+    except Exception as e:
+        print(f"⚠️  Failed to read scheduler.config, using defaults: {e}")
+    return defaults
 
 # ── State file ────────────────────────────────────────────────────────────────
 def load_state():
@@ -129,7 +150,7 @@ def ask_yn(label, default='Y'):
 
 # ── Confirm screen ────────────────────────────────────────────────────────────
 def print_config(interval_min, buffer_min, import_pi, import_minestar,
-                 cycle_num=None, last_run=None):
+                 cycle_num=None, last_run=None, unattended=False):
     cls()
     print(TOP)
     title = '    Sino Iron — Auto Scheduler'
@@ -137,6 +158,7 @@ def print_config(interval_min, buffer_min, import_pi, import_minestar,
         title += f'  (Cycle #{cycle_num})'
     print(row(title))
     print(SEP)
+    print(row(f'    Mode      : {"Unattended (auto-start)" if unattended else "Interactive"}'))
     print(row(f'    Interval  : every {interval_min} min'))
     print(row(f'    Window    : last {interval_min + buffer_min} min  (buffer +{buffer_min} min)'))
     print(row(f'    Import PI : {"Yes" if import_pi else "No"}'))
@@ -246,6 +268,14 @@ def countdown(seconds, interval_min, cycle_num):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    # ── Load scheduler config ─────────────────────────────────────────────────
+    cfg             = load_scheduler_config()
+    unattended      = cfg['unattended']
+    interval_min    = cfg['interval_min']
+    buffer_min      = cfg['buffer_min']
+    import_pi       = cfg['import_pi']
+    import_minestar = cfg['import_minestar']
+
     # ── Check state file for previous run ────────────────────────────────────
     state = load_state()
     last_run_dt   = None
@@ -254,69 +284,80 @@ def main():
 
     if state:
         try:
-            last_run_dt  = datetime.strptime(state['last_run'], '%Y-%m-%d %H:%M:%S')
-            resume_cycle = state.get('cycle_count', 0) + 1
-            last_interval= state.get('interval_min', 30)
-            elapsed_s    = (datetime.now() - last_run_dt).total_seconds()
-            remaining_s  = last_interval * 60 - elapsed_s
+            last_run_dt   = datetime.strptime(state['last_run'], '%Y-%m-%d %H:%M:%S')
+            resume_cycle  = state.get('cycle_count', 0) + 1
+            last_interval = state.get('interval_min', interval_min)
+            elapsed_s     = (datetime.now() - last_run_dt).total_seconds()
+            remaining_s   = last_interval * 60 - elapsed_s
             if remaining_s > 0:
                 resume_wait_s = int(remaining_s)
         except Exception:
             pass
 
-    # ── Setup screen ─────────────────────────────────────────────────────────
-    cls()
-    print(TOP)
-    print(row('    Sino Iron — Auto Scheduler Setup'))
-    if last_run_dt:
-        print(SEP)
-        print(row(f'    Previous state found:'))
-        print(row(f'    Last run : {last_run_dt.strftime("%Y-%m-%d %H:%M")}'))
-        print(row(f'    Cycles   : {resume_cycle - 1}'))
-        if resume_wait_s > 0:
-            mm, ss = divmod(resume_wait_s, 60)
-            hh, mm = divmod(mm, 60)
-            print(row(f'    Resume in: {hh:02d}:{mm:02d}:{ss:02d}  (skipping immediate run)'))
-    print(BOT)
-    print()
-    print("  Configure the auto-run schedule:")
-    print()
-
-    interval_min    = ask_interval(state.get('interval_min'))
-    buffer_min      = ask_buffer()
-    import_pi       = ask_yn('Import PI data each cycle',       'Y')
-    import_minestar = ask_yn('Import Minestar data each cycle', 'Y')
+    # ── Interactive mode: override config with user input ─────────────────────
+    if not unattended:
+        cls()
+        print(TOP)
+        print(row('    Sino Iron — Auto Scheduler Setup'))
+        if last_run_dt:
+            print(SEP)
+            print(row(f'    Previous state found:'))
+            print(row(f'    Last run : {last_run_dt.strftime("%Y-%m-%d %H:%M")}'))
+            print(row(f'    Cycles   : {resume_cycle - 1}'))
+            if resume_wait_s > 0:
+                mm, ss = divmod(resume_wait_s, 60)
+                hh, mm = divmod(mm, 60)
+                print(row(f'    Resume in: {hh:02d}:{mm:02d}:{ss:02d}  (skipping immediate run)'))
+        print(BOT)
+        print()
+        print("  Configure the auto-run schedule:")
+        print()
+        interval_min    = ask_interval(cfg['interval_min'])
+        buffer_min      = ask_buffer()
+        import_pi       = ask_yn('Import PI data each cycle',       'Y')
+        import_minestar = ask_yn('Import Minestar data each cycle', 'Y')
 
     last_run_str = last_run_dt.strftime('%Y-%m-%d %H:%M') if last_run_dt else 'None'
     print_config(interval_min, buffer_min, import_pi, import_minestar,
-                 last_run=last_run_str)
+                 last_run=last_run_str, unattended=unattended)
 
-    if resume_wait_s > 0:
-        mm2, ss2 = divmod(resume_wait_s, 60)
-        hh2, mm2 = divmod(mm2, 60)
-        print(f"  ⚡ Last run was {int((interval_min*60 - resume_wait_s)/60)} min ago.")
-        print(f"     Will resume countdown ({hh2:02d}:{mm2:02d}:{ss2:02d} remaining).")
-        print(f"     Press Enter to CONFIRM  |  R to run immediately  |  Q to quit")
+    # ── Confirm / auto-start ──────────────────────────────────────────────────
+    force_run = False
+    if unattended:
+        if resume_wait_s > 0:
+            mm, ss = divmod(resume_wait_s, 60)
+            hh, mm = divmod(mm, 60)
+            print(f"  ✅ Unattended mode — resuming countdown: {hh:02d}:{mm:02d}:{ss:02d} remaining")
+        else:
+            print(f"  ✅ Unattended mode — starting first cycle now")
     else:
-        print("  Press Enter to START  |  Q to quit")
+        if resume_wait_s > 0:
+            mm2, ss2 = divmod(resume_wait_s, 60)
+            hh2, mm2 = divmod(mm2, 60)
+            print(f"  ⚡ Last run was {int((interval_min*60 - resume_wait_s)/60)} min ago.")
+            print(f"     Will resume countdown ({hh2:02d}:{mm2:02d}:{ss2:02d} remaining).")
+            print(f"     Press Enter to CONFIRM  |  R to run immediately  |  Q to quit")
+        else:
+            print("  Press Enter to START  |  Q to quit")
 
-    raw = input("  > ").strip().upper()
-    if raw == 'Q':
-        print("\n  Cancelled.")
-        sys.exit(0)
+        raw = input("  > ").strip().upper()
+        if raw == 'Q':
+            print("\n  Cancelled.")
+            sys.exit(0)
+        if raw == 'R':
+            force_run = True
 
     cycle_num = resume_cycle
 
     try:
-        # If restarted within interval and user did not force-run, skip first run
-        if resume_wait_s > 0 and raw != 'R':
+        if resume_wait_s > 0 and not force_run:
             print_config(interval_min, buffer_min, import_pi, import_minestar,
-                         cycle_num=cycle_num, last_run=last_run_str)
+                         cycle_num=cycle_num, last_run=last_run_str, unattended=unattended)
             countdown(resume_wait_s, interval_min, cycle_num - 1)
 
         while True:
             print_config(interval_min, buffer_min, import_pi, import_minestar,
-                         cycle_num=cycle_num)
+                         cycle_num=cycle_num, unattended=unattended)
             run_cycle(interval_min, buffer_min, import_pi, import_minestar, cycle_num)
             countdown(interval_min * 60, interval_min, cycle_num)
             cycle_num += 1
