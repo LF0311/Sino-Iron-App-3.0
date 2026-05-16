@@ -614,7 +614,8 @@ def generate_silo_tracking_data(start_date, end_date, overwrite=False):
     current_date = start_date
     while current_date <= end_date:
         day_start = pd.Timestamp(current_date.date())
-        day_end = day_start + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
+        day_end_full = day_start + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
+        day_end = min(day_end_full, pd.Timestamp(end_date).replace(second=0, microsecond=0))
         time_range = pd.date_range(start=day_start, end=day_end, freq='1min')
 
         print(f"\n{'=' * 60}")

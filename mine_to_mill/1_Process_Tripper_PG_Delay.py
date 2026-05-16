@@ -379,7 +379,8 @@ def process_date_range(start_date, end_date, overwrite=False):
 
     while current_date <= end_date:
         day_start = pd.Timestamp(current_date.date())
-        day_end = day_start + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
+        day_end_full = day_start + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
+        day_end = min(day_end_full, pd.Timestamp(end_date).replace(second=0, microsecond=0))
 
         print(f"\n{'=' * 80}")
         print(f"Processing Tripper data for {day_start.date()}")

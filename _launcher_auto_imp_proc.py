@@ -182,9 +182,9 @@ def load_module(path, name):
     return mod
 
 # ── Single cycle ──────────────────────────────────────────────────────────────
-def run_cycle(interval_min, buffer_min, import_pi, import_minestar, cycle_num):
+def run_cycle(interval_min, buffer_min, import_pi, import_minestar, cycle_num, override_start=None):
     end_dt   = datetime.now().replace(second=0, microsecond=0)
-    start_dt = end_dt - timedelta(minutes=interval_min + buffer_min)
+    start_dt = override_start if override_start is not None else (end_dt - timedelta(minutes=interval_min + buffer_min))
 
     print(f"\n  ─── Cycle #{cycle_num}  started {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ───")
     print(f"  Window : {start_dt}  →  {end_dt}\n")
@@ -349,6 +349,14 @@ def main():
 
     cycle_num = resume_cycle
 
+    # ── Catch-up: if gap since last run exceeds one interval, backfill from last_run ──
+    catchup_start = None
+    if last_run_dt and resume_wait_s <= 0:
+        gap_min = (datetime.now() - last_run_dt).total_seconds() / 60
+        if gap_min > interval_min + buffer_min:
+            catchup_start = last_run_dt - timedelta(minutes=buffer_min)
+            print(f"  ⚡ Gap detected ({int(gap_min)} min) — catch-up cycle from {catchup_start.strftime('%Y-%m-%d %H:%M')}")
+
     try:
         if resume_wait_s > 0 and not force_run:
             print_config(interval_min, buffer_min, import_pi, import_minestar,
@@ -358,7 +366,12 @@ def main():
         while True:
             print_config(interval_min, buffer_min, import_pi, import_minestar,
                          cycle_num=cycle_num, unattended=unattended)
-            run_cycle(interval_min, buffer_min, import_pi, import_minestar, cycle_num)
+            if catchup_start is not None:
+                run_cycle(interval_min, buffer_min, import_pi, import_minestar, cycle_num,
+                          override_start=catchup_start)
+                catchup_start = None
+            else:
+                run_cycle(interval_min, buffer_min, import_pi, import_minestar, cycle_num)
             countdown(interval_min * 60, interval_min, cycle_num)
             cycle_num += 1
 

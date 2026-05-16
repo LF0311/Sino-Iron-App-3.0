@@ -304,8 +304,9 @@ def process_cvr_data_for_date(engine, start_date, end_date, overwrite=False):
 
     current_date = start_date.date()
     day_start = pd.Timestamp(current_date)
-    day_end = pd.Timestamp(current_date) + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
-    day_time_range = pd.date_range(start=day_start, end=day_end, freq='min')
+    day_end_full = pd.Timestamp(current_date) + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
+    effective_end = min(day_end_full, pd.Timestamp(end_date).replace(second=0, microsecond=0))
+    day_time_range = pd.date_range(start=day_start, end=effective_end, freq='min')
 
     daily_data = df[df['Dump Time'].dt.date == current_date].sort_values('Dump Time')
 
@@ -346,7 +347,7 @@ def process_cvr_data_for_date(engine, start_date, end_date, overwrite=False):
                 interval_range = pd.date_range(start=first_current_time, end=end_time, freq='min')
 
                 for time_point in interval_range:
-                    if day_start <= time_point <= day_end:
+                    if day_start <= time_point <= effective_end:
                         mask = daily_result['Current Timestamp'] == time_point
                         daily_result.loc[mask, 'Dump Time'] = dump_time
                         for col in TRUCK_COLS_TO_KEEP:
