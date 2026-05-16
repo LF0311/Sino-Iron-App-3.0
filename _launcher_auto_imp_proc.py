@@ -367,13 +367,26 @@ def main():
 
     cycle_num = resume_cycle
 
-    # ── Catch-up: if gap since last run exceeds one interval, backfill from last_run ──
-    # If no state file, fall back to querying the DB for the last data timestamp.
-    catchup_ref = last_run_dt
-    if catchup_ref is None and resume_wait_s <= 0:
-        catchup_ref = get_db_last_time()
-        if catchup_ref:
-            print(f"  ℹ️  No state file — DB last data time: {catchup_ref.strftime('%Y-%m-%d %H:%M')}")
+    # ── Catch-up reference time: DB is ground truth, state is hint ──────────────
+    # Always query DB regardless of state file. If both exist and agree within
+    # 30 min, trust state (faster). If they diverge > 30 min, trust DB (state
+    # may reflect a partial/aborted run).
+    db_last_time = get_db_last_time()
+
+    catchup_ref = None
+    if last_run_dt and db_last_time:
+        diff_min = abs((last_run_dt - db_last_time).total_seconds() / 60)
+        if diff_min <= 30:
+            catchup_ref = last_run_dt
+            print(f"  ℹ️  State/DB in sync (diff={diff_min:.0f} min) — reference: {catchup_ref.strftime('%Y-%m-%d %H:%M')}")
+        else:
+            catchup_ref = db_last_time
+            print(f"  ⚠️  State/DB discrepancy ({diff_min:.0f} min) — using DB time: {catchup_ref.strftime('%Y-%m-%d %H:%M')}")
+    elif last_run_dt:
+        catchup_ref = last_run_dt
+    elif db_last_time:
+        catchup_ref = db_last_time
+        print(f"  ℹ️  No state file — DB last data time: {catchup_ref.strftime('%Y-%m-%d %H:%M')}")
 
     catchup_start = None
     if catchup_ref and resume_wait_s <= 0:
