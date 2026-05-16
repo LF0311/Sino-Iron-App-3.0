@@ -23,6 +23,8 @@ import time
 import json
 from datetime import datetime, timedelta
 
+DB_CONNECTION = 'postgresql://postgres:postgres@localhost:5432/postgres'
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT_DIR              = os.path.dirname(os.path.abspath(__file__))
 MINE_TO_MILL          = os.path.join(ROOT_DIR, 'mine_to_mill')
@@ -74,6 +76,22 @@ def load_scheduler_config():
     except Exception as e:
         print(f"⚠️  Failed to read scheduler.config, using defaults: {e}")
     return defaults
+
+# ── DB last-time fallback (used when state file is absent) ───────────────────
+def get_db_last_time():
+    """Query MAX(时间) from production_lines as fallback for catch-up start."""
+    try:
+        from sqlalchemy import create_engine, text as sql_text
+        engine = create_engine(DB_CONNECTION, pool_pre_ping=True)
+        with engine.connect() as conn:
+            result = conn.execute(sql_text('SELECT MAX("时间") FROM production_lines'))
+            last = result.scalar()
+        engine.dispose()
+        if last:
+            return datetime.strptime(str(last)[:19], '%Y-%m-%d %H:%M:%S')
+    except Exception:
+        pass
+    return None
 
 # ── State file ────────────────────────────────────────────────────────────────
 def load_state():
@@ -350,11 +368,18 @@ def main():
     cycle_num = resume_cycle
 
     # ── Catch-up: if gap since last run exceeds one interval, backfill from last_run ──
+    # If no state file, fall back to querying the DB for the last data timestamp.
+    catchup_ref = last_run_dt
+    if catchup_ref is None and resume_wait_s <= 0:
+        catchup_ref = get_db_last_time()
+        if catchup_ref:
+            print(f"  ℹ️  No state file — DB last data time: {catchup_ref.strftime('%Y-%m-%d %H:%M')}")
+
     catchup_start = None
-    if last_run_dt and resume_wait_s <= 0:
-        gap_min = (datetime.now() - last_run_dt).total_seconds() / 60
+    if catchup_ref and resume_wait_s <= 0:
+        gap_min = (datetime.now() - catchup_ref).total_seconds() / 60
         if gap_min > interval_min + buffer_min:
-            catchup_start = last_run_dt - timedelta(minutes=buffer_min)
+            catchup_start = catchup_ref - timedelta(minutes=buffer_min)
             print(f"  ⚡ Gap detected ({int(gap_min)} min) — catch-up cycle from {catchup_start.strftime('%Y-%m-%d %H:%M')}")
 
     try:
