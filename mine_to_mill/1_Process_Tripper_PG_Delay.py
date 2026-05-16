@@ -376,10 +376,12 @@ def process_date_range(start_date, end_date, overwrite=False):
     current_date = start_date
     success_count = 0
     fail_count = 0
+    is_first = True
 
     while current_date <= end_date:
-        day_start = pd.Timestamp(current_date.date())
-        day_end_full = day_start + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
+        day_date = pd.Timestamp(current_date.date())
+        day_start = pd.Timestamp(start_date).replace(second=0, microsecond=0) if is_first else day_date
+        day_end_full = day_date + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
         day_end = min(day_end_full, pd.Timestamp(end_date).replace(second=0, microsecond=0))
 
         print(f"\n{'=' * 80}")
@@ -411,7 +413,8 @@ def process_date_range(start_date, end_date, overwrite=False):
             traceback.print_exc()
             fail_count += 1
 
-        current_date = day_start + timedelta(days=1)
+        current_date = day_date + timedelta(days=1)
+        is_first = False
 
     engine.dispose()
     print(f"\n{'=' * 80}")

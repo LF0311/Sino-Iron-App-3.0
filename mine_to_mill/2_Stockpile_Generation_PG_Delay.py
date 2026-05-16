@@ -315,6 +315,59 @@ def initialize_silos(initial_levels):
     return silos
 
 
+def load_silo_state_from_db(engine, start_date):
+    """Restore silo state from DB at the minute before start_date for warm restart.
+
+    Returns a fully-populated silos dict if all 18 silos found, else None.
+    """
+    target_time = (pd.Timestamp(start_date).replace(second=0, microsecond=0)
+                   - pd.Timedelta(minutes=1))
+    with engine.connect() as conn:
+        df = pd.read_sql(text("""
+            SELECT silo_num, filling_level, mass, composition_tons
+            FROM silo_tracking
+            WHERE time = :t
+            ORDER BY silo_num
+        """), conn, params={'t': target_time})
+
+    if df.empty:
+        # Fall back to most-recent row per silo before start_date
+        with engine.connect() as conn:
+            df = pd.read_sql(text("""
+                SELECT DISTINCT ON (silo_num)
+                    silo_num, filling_level, mass, composition_tons
+                FROM silo_tracking
+                WHERE time < :t
+                ORDER BY silo_num, time DESC
+            """), conn, params={'t': pd.Timestamp(start_date)})
+
+    if df.empty or len(df) != SILOS_COUNT:
+        return None
+
+    silos = {}
+    for _, row in df.iterrows():
+        silo_num = int(row['silo_num'])
+        filling = float(row['filling_level']) if pd.notna(row['filling_level']) else 50.0
+        mass = float(row['mass']) if pd.notna(row['mass']) else calculate_mass(filling)
+        comp = row['composition_tons']
+        if isinstance(comp, str):
+            try:
+                comp = json.loads(comp)
+            except Exception:
+                comp = {}
+        if not isinstance(comp, dict):
+            comp = {}
+        layers = [
+            OreLayer(source=str(src), data={'TotalOre': float(tons)}, timestamp=datetime.min)
+            for src, tons in comp.items() if float(tons) > 0
+        ]
+        if not layers:
+            layers = [OreLayer(source='Unknown', data={'TotalOre': float(mass)}, timestamp=datetime.min)]
+        silos[silo_num] = {'filling': filling, 'mass': mass, 'layers': layers}
+
+    return silos
+
+
 def get_silo_being_filled(silo_data, current_time, tripper_number):
     """Find the silo number currently being filled by the tripper, from realtime_data (silo_data)."""
     delayed_time = current_time - timedelta(minutes=TRIPPER_TO_SILO_DELAY)
@@ -607,19 +660,30 @@ def generate_silo_tracking_data(start_date, end_date, overwrite=False):
     source_props = build_source_properties_lookup(tripper1_data, tripper2_data)
     print(f"✅ Source properties lookup built: {len(source_props)} ore sources")
 
-    initial_levels = get_initial_silo_levels(silo_data, start_date)
-    silos = initialize_silos(initial_levels)
+    # Warm restart: try to restore silo state from DB instead of initializing as Unknown
+    db_silos = load_silo_state_from_db(engine, start_date)
+    if db_silos:
+        silos = db_silos
+        first_day_start = pd.Timestamp(start_date).replace(second=0, microsecond=0)
+        print(f"✅ Silo state restored from DB — resuming at {first_day_start}")
+    else:
+        initial_levels = get_initial_silo_levels(silo_data, start_date)
+        silos = initialize_silos(initial_levels)
+        first_day_start = pd.Timestamp(start_date.date())
+        print(f"ℹ️  No prior DB state — cold start from {first_day_start.date()}")
 
     # Process day by day
+    is_first = True
     current_date = start_date
     while current_date <= end_date:
-        day_start = pd.Timestamp(current_date.date())
-        day_end_full = day_start + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
+        day_date = pd.Timestamp(current_date.date())
+        day_start = first_day_start if is_first else day_date
+        day_end_full = day_date + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
         day_end = min(day_end_full, pd.Timestamp(end_date).replace(second=0, microsecond=0))
         time_range = pd.date_range(start=day_start, end=day_end, freq='1min')
 
         print(f"\n{'=' * 60}")
-        print(f"Processing {day_start.date()}  ({len(time_range)} minutes)")
+        print(f"Processing {day_date.date()}  ({len(time_range)} minutes)")
         print(f"{'=' * 60}")
 
         day_records = []
@@ -635,7 +699,8 @@ def generate_silo_tracking_data(start_date, end_date, overwrite=False):
                 print(f"  Progress: {i + 1}/{len(time_range)}")
 
         write_to_pg(engine, day_records, overwrite, day_start, day_end)
-        current_date = day_start + timedelta(days=1)
+        current_date = day_date + timedelta(days=1)
+        is_first = False
 
     engine.dispose()
     print("\n✅ silo_tracking generation complete!")

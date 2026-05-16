@@ -303,7 +303,7 @@ def process_cvr_data_for_date(engine, start_date, end_date, overwrite=False):
     }
 
     current_date = start_date.date()
-    day_start = pd.Timestamp(current_date)
+    day_start = pd.Timestamp(start_date).replace(second=0, microsecond=0)
     day_end_full = pd.Timestamp(current_date) + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
     effective_end = min(day_end_full, pd.Timestamp(end_date).replace(second=0, microsecond=0))
     day_time_range = pd.date_range(start=day_start, end=effective_end, freq='min')
