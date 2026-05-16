@@ -79,12 +79,12 @@ def load_scheduler_config():
 
 # ── DB last-time fallback (used when state file is absent) ───────────────────
 def get_db_last_time():
-    """Query MAX(时间) from production_lines as fallback for catch-up start."""
+    """Query MAX(time) from mill_feed (final processing output) for catch-up reference."""
     try:
         from sqlalchemy import create_engine, text as sql_text
         engine = create_engine(DB_CONNECTION, pool_pre_ping=True)
         with engine.connect() as conn:
-            result = conn.execute(sql_text('SELECT MAX("时间") FROM production_lines'))
+            result = conn.execute(sql_text('SELECT MAX(time) FROM mill_feed'))
             last = result.scalar()
         engine.dispose()
         if last:
